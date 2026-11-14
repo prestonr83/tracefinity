@@ -13,6 +13,10 @@ import {
 } from '@/lib/symmetry'
 import { DISPLAY_SCALE, SNAP_GRID, ZOOM_FACTOR, OUTLINE_SIZE_MIN, OUTLINE_SIZE_MAX } from '@/lib/constants'
 import { cutoutShapeLabel, isRectangularCutout, resizeRectCutout, resizeRoundCutout } from '@/lib/cutouts'
+import {
+  gridLines, vertexLookup, resolveDimensions, pruneDimensions, reverseVertexRefs,
+  createDimension, hasDimension, type Dimension,
+} from '@/lib/editorGrid'
 import { useHistory } from '@/hooks/useHistory'
 import { ToolEditorToolbar } from '@/components/ToolEditorToolbar'
 import { ToolEditorCanvas } from '@/components/ToolEditorCanvas'
@@ -71,7 +75,12 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
   // off by default: outline vertices carry the traced size, a 5mm lattice
   // would quantise corrections by up to ~3.5mm
   const [snapEnabled, setSnapEnabled] = useState(false)
-  const [snapGrid, setSnapGrid] = useState(SNAP_GRID)
+  // one spacing drives both the drawn grid and snapping
+  const [gridStep, setGridStep] = useState(SNAP_GRID)
+  const [showGrid, setShowGrid] = useState(true)
+  // point-to-point measurements; view-only, so they stay out of undo history
+  const [dimensions, setDimensions] = useState<Dimension[]>([])
+  const [pendingVertex, setPendingVertex] = useState<number | null>(null)
   const [mirrorMode, setMirrorMode] = useState(false)
   const [symmetryAxis, setSymmetryAxis] = useState<SymmetryAxis | null>(null)
   const [keepSide, setKeepSide] = useState<KeepSide>('low')
@@ -209,16 +218,62 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
   const zvbX = vbX + (vbW - zvbW) / 2 + pan.x
   const zvbY = vbY + (vbH - zvbH) / 2 + pan.y
 
-  // grid lines (10mm spacing, centered on origin)
-  const gridStep = 10
+  // grid lines at the chosen spacing, aligned to the origin and coarsened
+  // when the view is zoomed out too far to draw every line
   const visMinX = zvbX / DISPLAY_SCALE
   const visMaxX = (zvbX + zvbW) / DISPLAY_SCALE
   const visMinY = zvbY / DISPLAY_SCALE
   const visMaxY = (zvbY + zvbH) / DISPLAY_SCALE
-  const gridMinX = Math.floor(visMinX / gridStep) * gridStep
-  const gridMaxX = Math.ceil(visMaxX / gridStep) * gridStep
-  const gridMinY = Math.floor(visMinY / gridStep) * gridStep
-  const gridMaxY = Math.ceil(visMaxY / gridStep) * gridStep
+  const gridX = gridLines(visMinX, visMaxX, gridStep)
+  const gridY = gridLines(visMinY, visMaxY, gridStep)
+  const drawnGridStep = Math.max(gridX.step, gridY.step)
+
+  // dimensions follow the live outline during a drag
+  const resolvedDimensions = useMemo(
+    () => resolveDimensions(dimensions, vertexLookup(rawDisplayPoints)),
+    [dimensions, rawDisplayPoints])
+  const pendingPoint = pendingVertex !== null ? rawDisplayPoints[pendingVertex] ?? null : null
+  // an insert, delete or Detail change renumbers the vertices: adjust state
+  // during render so stale measurements never reach the screen
+  const prunedDimensions = pruneDimensions(dimensions, vertexLookup(points))
+  if (prunedDimensions !== dimensions) setDimensions(prunedDimensions)
+  if (pendingVertex !== null && pendingVertex >= points.length) setPendingVertex(null)
+  const removeDimension = useCallback((id: string) => {
+    setDimensions(current => current.filter(d => d.id !== id))
+  }, [])
+  const clearDimensions = useCallback(() => {
+    setDimensions([])
+    setPendingVertex(null)
+  }, [])
+  // first click marks a vertex, second click measures to it
+  const pendingVertexRef = useRef(pendingVertex)
+  useEffect(() => { pendingVertexRef.current = pendingVertex }, [pendingVertex])
+  const measureVertex = useCallback((pointIdx: number) => {
+    const count = pointsRef.current.length
+    const current = pendingVertexRef.current
+    if (current === null) {
+      setPendingVertex(pointIdx)
+      return
+    }
+    if (current !== pointIdx) {
+      const a = { poly: null, index: current, count }
+      const b = { poly: null, index: pointIdx, count }
+      setDimensions(dims => hasDimension(dims, a, b) ? dims : [...dims, createDimension(a, b)])
+    }
+    setPendingVertex(null)
+  }, [])
+  // leaving Measure mode abandons a half-made measurement
+  const changeEditMode = useCallback((mode: EditMode) => {
+    setEditMode(mode)
+    if (mode !== 'measure') setPendingVertex(null)
+  }, [])
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPendingVertex(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   const screenToMm = useCallback((clientX: number, clientY: number): Point => {
     if (!svgRef.current) return { x: 0, y: 0 }
@@ -301,8 +356,8 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
 
   const snapToGrid = useCallback((v: number) => {
     if (!snapEnabled) return v
-    return snapToGridUtil(v, snapGrid)
-  }, [snapEnabled, snapGrid])
+    return snapToGridUtil(v, gridStep)
+  }, [snapEnabled, gridStep])
 
   const snapRef = useRef(snapToGrid)
   useEffect(() => { snapRef.current = snapToGrid }, [snapToGrid])
@@ -322,6 +377,9 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
     pushHistory({ points: result.points, fingerHoles: result.fingerHoles, interiorRings: currentRingsRef.current })
     onPointsRef.current(result.points)
     onHolesRef.current(result.fingerHoles)
+    // mirroring reorders the vertices, so measurements would attach to the wrong ones
+    setDimensions([])
+    setPendingVertex(null)
     return true
   }, [newHoleId, pushHistory])
 
@@ -449,6 +507,9 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
     onPointsRef.current(newPts)
     onHolesRef.current(newHoles)
     onInteriorRingsChange?.(newRings)
+    // the reversal renumbers every vertex; keep measurements on the same corners
+    setDimensions(current => reverseVertexRefs(current))
+    setPendingVertex(current => current === null ? null : n - 1 - current)
     if (nextTransform) {
       imageTransformRef.current = nextTransform
       onImageTransformRef.current?.(nextTransform)
@@ -532,6 +593,10 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
   // vertex interactions
   const handleVertexMouseDown = (pointIdx: number) => (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (editMode === 'measure') {
+      measureVertex(pointIdx)
+      return
+    }
     if (editMode === 'delete-vertex') {
       if (mirrorModeRef.current && axisRef.current) {
         const updated = deleteMirroredVertex(points, pointIdx)
@@ -631,6 +696,7 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
       return
     }
     setSelection(null)
+    setPendingVertex(null)
   }
 
   const handleSvgMouseDown = (e: React.MouseEvent) => {
@@ -861,11 +927,13 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
         isCutoutMode={isCutoutMode}
         handleBackgroundClick={handleBackgroundClick}
         handleSvgMouseDown={handleSvgMouseDown}
-        gridMinX={gridMinX}
-        gridMaxX={gridMaxX}
-        gridMinY={gridMinY}
-        gridMaxY={gridMaxY}
-        gridStep={gridStep}
+        showGrid={showGrid}
+        gridLinesX={gridX.positions}
+        gridLinesY={gridY.positions}
+        gridExtent={{ minX: visMinX, maxX: visMaxX, minY: visMinY, maxY: visMaxY }}
+        dimensions={resolvedDimensions}
+        pendingVertex={pendingPoint}
+        onRemoveDimension={editMode === 'measure' ? removeDimension : undefined}
         zoom={zoom}
         displayPoints={displayPoints}
         smoothed={previewSmoothed}
@@ -896,7 +964,7 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
         <div className="glass-toolbar px-2 py-1 max-w-full pointer-events-auto">
         <ToolEditorToolbar
           editMode={editMode}
-          setEditMode={setEditMode}
+          setEditMode={changeEditMode}
           previewSmoothed={previewSmoothed}
           setPreviewSmoothed={setPreviewSmoothed}
           outputSmoothed={smoothed}
@@ -905,8 +973,13 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
           onSmoothLevelChange={onSmoothLevelChange}
           snapEnabled={snapEnabled}
           setSnapEnabled={setSnapEnabled}
-          snapGrid={snapGrid}
-          setSnapGrid={setSnapGrid}
+          gridStep={gridStep}
+          setGridStep={setGridStep}
+          drawnGridStep={drawnGridStep}
+          showGrid={showGrid}
+          setShowGrid={setShowGrid}
+          dimensionCount={resolvedDimensions.length}
+          clearDimensions={clearDimensions}
           mirrorMode={mirrorMode}
           toggleMirror={toggleMirror}
           axisOrientation={symmetryAxis?.orientation ?? 'vertical'}
@@ -942,9 +1015,15 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
         </div>
       </div>
 
-      {mirrorNote && (
+      {mirrorNote ? (
         <div className={cn("absolute top-[58px] left-1/2 -translate-x-1/2 z-20 glass-toolbar px-3 py-1.5 text-[11px] max-w-[320px] text-center pointer-events-none", theme === 'dark' ? 'text-amber-300' : 'text-amber-600')}>
           {mirrorNote}
+        </div>
+      ) : editMode === 'measure' && (
+        <div role="status" className="absolute top-[58px] left-1/2 -translate-x-1/2 z-20 glass-toolbar px-3 py-1.5 text-[11px] max-w-[360px] text-center pointer-events-none text-text-secondary">
+          {pendingVertex === null
+            ? 'Click two outline points to measure between them. Click a measurement to remove it.'
+            : 'Click a second point to finish the measurement, or Escape to cancel.'}
         </div>
       )}
 

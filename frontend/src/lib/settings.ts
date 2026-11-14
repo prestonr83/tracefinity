@@ -1,14 +1,17 @@
-import type { BinDefaults } from '@/types'
+import type { BinDefaults, PaperSize } from '@/types'
+import { DEFAULT_PAPER_SIZE, isPaperSize } from './paperSizes'
 
 export interface UserSettings {
   bedSize: number
+  // sheet preselected for a new photo; the photo's own choice wins once saved
+  defaultPaperSize: PaperSize
   binDefaults?: Partial<BinDefaults>
 }
 
 export const BED_SIZE_MIN_MM = 150
 export const BED_SIZE_MAX_MM = 500
 
-const DEFAULTS: UserSettings = { bedSize: 256 }
+const DEFAULTS: UserSettings = { bedSize: 256, defaultPaperSize: DEFAULT_PAPER_SIZE }
 const KEY = 'tracefinity-settings'
 
 export function getSettings(): UserSettings {
@@ -16,7 +19,10 @@ export function getSettings(): UserSettings {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return DEFAULTS
-    return { ...DEFAULTS, ...JSON.parse(raw) }
+    const settings: UserSettings = { ...DEFAULTS, ...JSON.parse(raw) }
+    // a stored value from an older or hand-edited file must not reach the API
+    if (!isPaperSize(settings.defaultPaperSize)) settings.defaultPaperSize = DEFAULT_PAPER_SIZE
+    return settings
   } catch {
     return DEFAULTS
   }

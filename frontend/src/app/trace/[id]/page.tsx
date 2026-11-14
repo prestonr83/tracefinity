@@ -13,16 +13,11 @@ import { getSession, setCorners, traceTools, updatePolygons, updateSession, getI
 import { CornersHint, TraceHint, EditHint } from '@/components/OnboardingIllustrations'
 import { PhotoWarningsBanner } from '@/components/PhotoWarningsBanner'
 import { StepBar } from '@/components/StepBar'
+import { getSettings } from '@/lib/settings'
+import { DEFAULT_PAPER_SIZE, PAPER_SIZE_OPTIONS } from '@/lib/paperSizes'
 import type { PaperSize, PhotoWarning, Point, Polygon, Session } from '@/types'
 
 type Step = 'corners' | 'trace' | 'edit'
-
-const PAPER_SIZE_OPTIONS: { value: PaperSize; label: string }[] = [
-  { value: 'a4', label: 'A4' },
-  { value: 'letter', label: 'Letter' },
-  { value: 'a3', label: 'A3' },
-  { value: 'tabloid', label: 'Tabloid' },
-]
 
 const MASK_PROMPT = `Generate a pure black and white silhouette mask of ONLY the tools/objects in this image.
 - Tools should be solid BLACK (#000000)
@@ -61,7 +56,9 @@ export default function TracePage() {
   const [error, setError] = useState<string | null>(null)
 
   const [corners, setLocalCorners] = useState<Point[]>([])
-  const [paperSize, setPaperSize] = useState<PaperSize>('a4')
+  const [paperSize, setPaperSize] = useState<PaperSize>(DEFAULT_PAPER_SIZE)
+  // mm per corrected-image pixel, known once the corners are set
+  const [scaleFactor, setScaleFactor] = useState<number | null>(null)
   const [imageUrl, setImageUrl] = useState<string>('')
   const [correctedImageUrl, setCorrectedImageUrl] = useState<string>('')
   const [polygons, setPolygons] = useState<Polygon[]>([])
@@ -121,9 +118,9 @@ export default function TracePage() {
         if (s.corners) {
           setLocalCorners(s.corners)
         }
-        if (s.paper_size) {
-          setPaperSize(s.paper_size)
-        }
+        // the sheet saved with this photo wins over the preference
+        setPaperSize(s.paper_size ?? getSettings().defaultPaperSize)
+        setScaleFactor(s.scale_factor ?? null)
         if (s.corrected_image_path) {
           setCorrectedImageUrl(`/storage/${s.corrected_image_path}`)
         }
@@ -173,6 +170,7 @@ export default function TracePage() {
     try {
       const result = await setCorners(sessionId, corners, paperSize)
       setCorrectedImageUrl(result.corrected_image_url)
+      setScaleFactor(result.scale_factor)
       setImageVersion(Date.now())
       setPhotoWarnings(result.warnings ?? [])
       setWarningsDismissed(false)
@@ -747,6 +745,7 @@ export default function TracePage() {
             imageUrl={`${getImageUrl(correctedImageUrl)}?v=${imageVersion}`}
             polygons={polygons}
             onPolygonsChange={handlePolygonsChange}
+            mmPerPx={scaleFactor}
             editable={step === 'edit'}
             included={step === 'edit' ? includedPolygons : undefined}
             onIncludedChange={step === 'edit' ? setIncludedPolygons : undefined}

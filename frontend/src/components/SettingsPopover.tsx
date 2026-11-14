@@ -4,17 +4,22 @@ import { useState, useEffect, useRef } from 'react'
 import { Settings } from 'lucide-react'
 import { getAppVersion } from '@/lib/api'
 import { BED_SIZE_MAX_MM, BED_SIZE_MIN_MM, getSettings, saveSettings } from '@/lib/settings'
+import { DEFAULT_PAPER_SIZE, PAPER_SIZE_OPTIONS } from '@/lib/paperSizes'
 import { IconButton } from '@/components/IconButton'
 import { NumericInput } from '@/components/NumericInput'
+import type { PaperSize } from '@/types'
 
 export function SettingsPopover() {
   const [open, setOpen] = useState(false)
   const [bedSize, setBedSize] = useState(256)
+  const [paperSize, setPaperSize] = useState<PaperSize>(DEFAULT_PAPER_SIZE)
   const [version, setVersion] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    setBedSize(getSettings().bedSize)
+    const settings = getSettings()
+    setBedSize(settings.bedSize)
+    setPaperSize(settings.defaultPaperSize)
   }, [])
 
   useEffect(() => {
@@ -36,6 +41,11 @@ export function SettingsPopover() {
   function handleBedSizeChange(v: number) {
     setBedSize(v)
     saveSettings({ bedSize: v })
+  }
+
+  function handlePaperSizeChange(size: PaperSize) {
+    setPaperSize(size)
+    saveSettings({ defaultPaperSize: size })
   }
 
   const pct = ((bedSize - BED_SIZE_MIN_MM) / (BED_SIZE_MAX_MM - BED_SIZE_MIN_MM)) * 100
@@ -79,6 +89,30 @@ export function SettingsPopover() {
             </div>
             <p className="text-[11px] text-text-muted leading-tight mt-1">
               Bins wider than this are automatically split into printable pieces.
+            </p>
+          </div>
+
+          <div className="space-y-1.5 mt-4" role="group" aria-label="Default Paper Size">
+            <span className="text-xs text-text-primary tracking-[0.3px]">Default Paper Size</span>
+            <div className="grid grid-cols-2 gap-0.5 rounded-[10px] bg-elevated p-0.5 w-full">
+              {PAPER_SIZE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handlePaperSizeChange(option.value)}
+                  aria-pressed={paperSize === option.value}
+                  className={`h-7 px-2 rounded text-xs font-medium whitespace-nowrap ${
+                    paperSize === option.value
+                      ? 'bg-surface text-text-primary shadow-sm'
+                      : 'text-text-muted hover:text-text-primary'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-text-muted leading-tight mt-1">
+              Preselected when setting the corners of a new photo. Each photo can still use another sheet.
             </p>
           </div>
 

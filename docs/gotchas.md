@@ -84,6 +84,8 @@ mesh booleans were measured at 10-100x faster for this workload. See
   scale committed on blur would be overwritten by the drag while the photo matrix
   and Detail base stayed scaled.
 - ToolEditor and BinEditor are split into orchestrator + toolbar + canvas sub-components. `CutoutOverlay` renders finger holes in both.
+- Measurements (`lib/editorGrid.ts`, `DimensionOverlay`) reference vertices by index plus the outline's vertex count at the time, not by position, so they follow a drag. Anything that renumbers vertices must deal with them: a count change drops them automatically, a flip remaps them (`reverseVertexRefs`), and mirroring clears them. Keep them out of undo history; they are annotations, not edits.
+- The tool editor and the trace page's PolygonEditor share one grid spacing for the overlay and for snapping. PolygonEditor works in corrected-image pixels and converts with the session `scale_factor` (mm per px); without it the grid, snap and measure controls are hidden.
 
 ## AVX / ONNX requirement
 

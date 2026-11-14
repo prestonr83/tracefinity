@@ -7,6 +7,8 @@ import { polygonPathData, smoothPathData } from '@/lib/svg'
 import { DISPLAY_SCALE } from '@/lib/constants'
 import { isRectangularCutout } from '@/lib/cutouts'
 import { CutoutOverlay } from '@/components/CutoutOverlay'
+import { DimensionOverlay, DIMENSION_COLOUR } from '@/components/DimensionOverlay'
+import type { ResolvedDimension } from '@/lib/editorGrid'
 import type { EditMode, Selection } from '@/components/ToolEditorToolbar'
 
 interface Props {
@@ -19,13 +21,17 @@ interface Props {
   handleBackgroundClick: (e: React.MouseEvent) => void
   handleSvgMouseDown: (e: React.MouseEvent) => void
 
-  // grid
-  gridMinX: number
-  gridMaxX: number
-  gridMinY: number
-  gridMaxY: number
-  gridStep: number
+  // grid, in mm
+  showGrid: boolean
+  gridLinesX: number[]
+  gridLinesY: number[]
+  gridExtent: { minX: number; maxX: number; minY: number; maxY: number }
   zoom: number
+
+  // measurements, in mm
+  dimensions: ResolvedDimension[]
+  pendingVertex: Point | null
+  onRemoveDimension?: (id: string) => void
 
   // polygon
   displayPoints: Point[]
@@ -58,7 +64,8 @@ interface Props {
 export function ToolEditorCanvas({
   svgRef, zvbX, zvbY, zvbW, zvbH, isCutoutMode,
   handleBackgroundClick, handleSvgMouseDown,
-  gridMinX, gridMaxX, gridMinY, gridMaxY, gridStep, zoom,
+  showGrid, gridLinesX, gridLinesY, gridExtent, zoom,
+  dimensions, pendingVertex, onRemoveDimension,
   displayPoints, smoothed, interiorRings,
   points, editMode, selection,
   handleEdgeClick, handleVertexMouseDown,
@@ -112,29 +119,31 @@ export function ToolEditorCanvas({
           )}
 
           {/* grid lines */}
-          {Array.from({ length: Math.ceil((gridMaxX - gridMinX) / gridStep) + 1 }).map((_, i) => {
-            const x = (gridMinX + i * gridStep) * DISPLAY_SCALE
-            const isOrigin = gridMinX + i * gridStep === 0
+          {showGrid && gridLinesX.map(gx => {
+            const isOrigin = gx === 0
             return (
               <line
-                key={`v${i}`}
-                x1={x} y1={gridMinY * DISPLAY_SCALE}
-                x2={x} y2={gridMaxY * DISPLAY_SCALE}
+                key={`v${gx}`}
+                data-grid-line="x"
+                x1={gx * DISPLAY_SCALE} y1={gridExtent.minY * DISPLAY_SCALE}
+                x2={gx * DISPLAY_SCALE} y2={gridExtent.maxY * DISPLAY_SCALE}
                 stroke={isOrigin ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'}
                 strokeWidth={(isOrigin ? 1.5 : 0.5) / zoom}
+                className="pointer-events-none"
               />
             )
           })}
-          {Array.from({ length: Math.ceil((gridMaxY - gridMinY) / gridStep) + 1 }).map((_, i) => {
-            const y = (gridMinY + i * gridStep) * DISPLAY_SCALE
-            const isOrigin = gridMinY + i * gridStep === 0
+          {showGrid && gridLinesY.map(gy => {
+            const isOrigin = gy === 0
             return (
               <line
-                key={`h${i}`}
-                x1={gridMinX * DISPLAY_SCALE} y1={y}
-                x2={gridMaxX * DISPLAY_SCALE} y2={y}
+                key={`h${gy}`}
+                data-grid-line="y"
+                x1={gridExtent.minX * DISPLAY_SCALE} y1={gy * DISPLAY_SCALE}
+                x2={gridExtent.maxX * DISPLAY_SCALE} y2={gy * DISPLAY_SCALE}
                 stroke={isOrigin ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'}
                 strokeWidth={(isOrigin ? 1.5 : 0.5) / zoom}
+                className="pointer-events-none"
               />
             )
           })}
@@ -218,21 +227,34 @@ export function ToolEditorCanvas({
             )
           })}
 
+          {/* point-to-point measurements, under the handles so vertices stay clickable */}
+          <DimensionOverlay
+            dimensions={dimensions}
+            scale={DISPLAY_SCALE}
+            ui={zvbW / 800}
+            pending={pendingVertex}
+            onRemove={onRemoveDimension}
+          />
+
           {/* vertex handles (hidden when smoothed) */}
-          {!smoothed && (editMode === 'select' || editMode === 'add-vertex' || editMode === 'delete-vertex') && displayPoints.map((p, idx) => (
-            <circle
-              key={`v-${idx}`}
-              cx={p.x * DISPLAY_SCALE}
-              cy={p.y * DISPLAY_SCALE}
-              r={8 / zoom}
-              fill={editMode === 'delete-vertex' ? 'rgb(239, 68, 68)' : selection?.type === 'vertex' && selection.pointIdx === idx ? 'rgb(72, 168, 214)' : '#1e293b'}
-              stroke={editMode === 'delete-vertex' ? 'rgb(185, 28, 28)' : 'rgb(72, 168, 214)'}
-              strokeWidth={2 / zoom}
-              className={editMode === 'delete-vertex' ? 'cursor-pointer' : 'cursor-move'}
-              onMouseDown={handleVertexMouseDown(idx)}
-              onClick={stopClick}
-            />
-          ))}
+          {!smoothed && (editMode === 'select' || editMode === 'add-vertex' || editMode === 'delete-vertex' || editMode === 'measure') && displayPoints.map((p, idx) => {
+            const isPending = editMode === 'measure' && pendingVertex?.x === p.x && pendingVertex?.y === p.y
+            return (
+              <circle
+                key={`v-${idx}`}
+                data-vertex={idx}
+                cx={p.x * DISPLAY_SCALE}
+                cy={p.y * DISPLAY_SCALE}
+                r={8 / zoom}
+                fill={editMode === 'delete-vertex' ? 'rgb(239, 68, 68)' : isPending ? DIMENSION_COLOUR : selection?.type === 'vertex' && selection.pointIdx === idx ? 'rgb(72, 168, 214)' : '#1e293b'}
+                stroke={editMode === 'delete-vertex' ? 'rgb(185, 28, 28)' : editMode === 'measure' ? DIMENSION_COLOUR : 'rgb(72, 168, 214)'}
+                strokeWidth={2 / zoom}
+                className={editMode === 'delete-vertex' ? 'cursor-pointer' : editMode === 'measure' ? 'cursor-crosshair' : 'cursor-move'}
+                onMouseDown={handleVertexMouseDown(idx)}
+                onClick={stopClick}
+              />
+            )
+          })}
 
           {/* bounding box with corner rotation zones */}
           {editMode === 'select' && displayPoints.length > 0 && (() => {

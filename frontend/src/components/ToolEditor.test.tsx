@@ -425,3 +425,153 @@ describe('ToolEditor outline size', () => {
     expect(span(editor.latest.points, 'y')).toBeCloseTo(1, 9)
   })
 })
+
+describe('ToolEditor grid, snap and measurements', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+  // 20 mm square; the view adds 20 mm of padding on each side
+  const square = [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }]
+  // 30 mm trapezoid whose vertices are distinguishable after a flip
+  const trapezoid = [{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 20, y: 10 }, { x: 0, y: 10 }]
+  const rect = {
+    x: 0, y: 0, left: 0, top: 0, right: 960, bottom: 560,
+    width: 960, height: 560, toJSON: () => ({}),
+  }
+
+  function setup(initial: Point[] = square) {
+    let current = initial
+    function Editor() {
+      const [outline, setOutline] = useState(initial)
+      return <ToolEditor points={outline} fingerHoles={[]} smoothed={false} smoothLevel={.5}
+        onPointsChange={next => { current = next; setOutline(next) }}
+        onFingerHolesChange={() => {}} onSmoothedChange={() => {}} onSmoothLevelChange={() => {}} />
+    }
+    const result = render(<Editor />)
+    vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    // inverse of the editor's screenToMm for the unzoomed view of the current outline
+    const client = (x: number, y: number) => {
+      const xs = current.map(p => p.x), ys = current.map(p => p.y)
+      const vbX = (Math.min(...xs) - 20) * 8, vbY = (Math.min(...ys) - 20) * 8
+      const vbW = (Math.max(...xs) - Math.min(...xs) + 40) * 8
+      const vbH = (Math.max(...ys) - Math.min(...ys) + 40) * 8
+      const scale = Math.max(vbW / rect.width, vbH / rect.height)
+      const offsetX = (rect.width * scale - vbW) / 2
+      const offsetY = (rect.height * scale - vbH) / 2
+      return { clientX: (x * 8 - vbX + offsetX) / scale, clientY: (y * 8 - vbY + offsetY) / scale }
+    }
+    const vertex = (idx: number) => result.container.querySelector(`circle[data-vertex="${idx}"]`)!
+    return {
+      ...result,
+      vertex,
+      outline: () => current,
+      gridLines: () => result.container.querySelectorAll('line[data-grid-line]'),
+      button: (name: string | RegExp) => screen.getByRole('button', { name }) as HTMLButtonElement,
+      drag(idx: number, x: number, y: number) {
+        fireEvent.mouseDown(vertex(idx), client(current[idx].x, current[idx].y))
+        fireEvent.mouseMove(window, client(x, y))
+        fireEvent.mouseUp(window)
+      },
+      setGridStep(value: string) {
+        const input = screen.getByTitle(/^Grid spacing/)
+        input.focus()
+        fireEvent.change(input, { target: { value } })
+        fireEvent.keyDown(input, { key: 'Enter' })
+      },
+      measure(a: number, b: number) {
+        fireEvent.mouseDown(vertex(a))
+        fireEvent.mouseDown(vertex(b))
+      },
+    }
+  }
+
+  it('draws the grid at the chosen spacing and can hide it', () => {
+    const editor = setup()
+    // -20 to 40 mm is visible on each axis
+    expect(editor.gridLines()).toHaveLength(26)
+    editor.setGridStep('10')
+    expect(editor.gridLines()).toHaveLength(14)
+    fireEvent.click(editor.button('Grid'))
+    expect(editor.gridLines()).toHaveLength(0)
+    expect(editor.button('Grid').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('moves a dragged vertex freely while Snap is off', () => {
+    const editor = setup()
+    editor.drag(2, 23.2, 17.9)
+    expect(editor.outline()[2].x).toBeCloseTo(23.2, 6)
+    expect(editor.outline()[2].y).toBeCloseTo(17.9, 6)
+  })
+
+  it('snaps a dragged vertex to the grid spacing while Snap is on', () => {
+    const editor = setup()
+    fireEvent.click(editor.button('Snap'))
+    editor.drag(2, 23.2, 17.9)
+    expect(editor.outline()[2]).toEqual({ x: 25, y: 20 })
+  })
+
+  it('measures between two clicked points and follows the vertex when it moves', () => {
+    const editor = setup()
+    fireEvent.click(editor.button('Measure'))
+    expect(screen.getByRole('status').textContent).toMatch(/two outline points/)
+    fireEvent.mouseDown(editor.vertex(0))
+    expect(screen.getByRole('status').textContent).toMatch(/second point/)
+    fireEvent.mouseDown(editor.vertex(1))
+    expect(screen.getByLabelText('Dimension 20.0 mm')).toBeTruthy()
+    // measurements are annotations, not edits
+    expect(editor.button('Undo (Ctrl+Z)').disabled).toBe(true)
+
+    fireEvent.click(editor.button('Select'))
+    editor.drag(1, 30, 0)
+    expect(screen.getByLabelText('Dimension 30.0 mm')).toBeTruthy()
+  })
+
+  it('keeps a measurement on the same corners through a flip', () => {
+    const editor = setup(trapezoid)
+    fireEvent.click(editor.button('Measure'))
+    editor.measure(0, 1)
+    expect(screen.getByLabelText('Dimension 30.0 mm')).toBeTruthy()
+    fireEvent.click(editor.button('Flip horizontally'))
+    // the flipped outline is stored in reverse order; the other pair of
+    // vertices at those indices would be 20 mm apart
+    expect(screen.getByLabelText('Dimension 30.0 mm')).toBeTruthy()
+    fireEvent.click(editor.button('Rotate 90 clockwise'))
+    expect(screen.getByLabelText('Dimension 30.0 mm')).toBeTruthy()
+  })
+
+  it('drops a measurement when a vertex is removed from the outline', () => {
+    const editor = setup()
+    fireEvent.click(editor.button('Measure'))
+    editor.measure(0, 2)
+    expect(screen.getByLabelText('Dimension 28.3 mm')).toBeTruthy()
+    expect(editor.button(/^Clear 1/)).toBeTruthy()
+
+    fireEvent.click(editor.button('Remove'))
+    fireEvent.mouseDown(editor.vertex(3))
+    expect(editor.outline()).toHaveLength(3)
+    expect(screen.queryByLabelText(/^Dimension /)).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Clear/ })).toBeNull()
+  })
+
+  it('removes a measurement when it is clicked in Measure mode or cleared', () => {
+    const editor = setup()
+    fireEvent.click(editor.button('Measure'))
+    editor.measure(0, 1)
+    editor.measure(1, 2)
+    expect(screen.getAllByLabelText(/^Dimension /)).toHaveLength(2)
+
+    fireEvent.click(screen.getAllByLabelText(/^Dimension /)[0])
+    expect(screen.getAllByLabelText(/^Dimension /)).toHaveLength(1)
+    fireEvent.click(editor.button(/^Clear 1/))
+    expect(screen.queryByLabelText(/^Dimension /)).toBeNull()
+  })
+
+  it('cancels a half-made measurement with Escape', () => {
+    const editor = setup()
+    fireEvent.click(editor.button('Measure'))
+    fireEvent.mouseDown(editor.vertex(0))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.getByRole('status').textContent).toMatch(/two outline points/)
+    fireEvent.mouseDown(editor.vertex(1))
+    expect(screen.queryByLabelText(/^Dimension /)).toBeNull()
+  })
+})

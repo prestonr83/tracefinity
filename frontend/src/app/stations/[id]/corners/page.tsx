@@ -10,15 +10,10 @@ import { StepBar } from '@/components/StepBar'
 import { getImageUrl, getPhotoStation, updatePhotoStation } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/hooks/useTheme'
+import { DEFAULT_PAPER_SIZE, PAPER_SIZE_OPTIONS } from '@/lib/paperSizes'
 import type { PaperSize, PhotoStation, Point } from '@/types'
 
 const STEPS = ['Stations', 'Corners']
-const PAPER_SIZE_OPTIONS: { value: PaperSize; label: string }[] = [
-  { value: 'a4', label: 'A4' },
-  { value: 'letter', label: 'Letter' },
-  { value: 'a3', label: 'A3' },
-  { value: 'tabloid', label: 'Tabloid' },
-]
 
 function fallbackStationImage(station: PhotoStation): string {
   const width = Math.max(1, station.image_width)
@@ -45,7 +40,8 @@ export default function StationCornersPage() {
   const router = useRouter()
   const stationId = params.id as string
   const [station, setStation] = useState<PhotoStation | null>(null)
-  const [paperSize, setPaperSize] = useState<PaperSize>('a4')
+  // placeholder until the station loads; a station always carries its sheet
+  const [paperSize, setPaperSize] = useState<PaperSize>(DEFAULT_PAPER_SIZE)
   const [corners, setCorners] = useState<Point[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)

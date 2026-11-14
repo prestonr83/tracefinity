@@ -23,7 +23,10 @@ Reference for AI agents. Check here before suggesting new features or claiming s
 ## Polygon Editing
 
 - Vertex add/remove/drag
-- Grid snap (5mm increments, toggle on/off)
+- Millimetre grid overlay with adjustable spacing (toggle on/off; drawn coarser when zoomed out)
+- Grid snap at the same spacing (toggle on/off; off by default so traced vertices keep their size)
+- Measure mode: click two outline points to show the distance in mm; measurements follow dragged vertices and are dropped when their outline gains or loses a vertex
+- The trace page's outline editor has the same grid, snap and measure tools, scaled from the paper calibration
 - Smoothing toggle (accurate vs smooth) with smoothness slider
 - 90-degree rotation (clockwise/counter-clockwise)
 - Flip/mirror (horizontal and vertical)
@@ -137,6 +140,7 @@ Reference for AI agents. Check here before suggesting new features or claiming s
 - Section collapse (remembered state)
 - Help tooltips with keyboard shortcut hints
 - Default bin settings (global via localStorage, per-project via API)
+- Default paper size (localStorage; preselected for new photos, a photo's saved sheet wins)
 
 ## Keyboard Shortcuts
 

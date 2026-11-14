@@ -1,13 +1,13 @@
 'use client'
 
 import { ReactNode, useState } from 'react'
-import { MousePointer2, Plus, Minus, Undo2, Redo2, Trash2, Circle, Disc, Square, RectangleHorizontal, Fingerprint, Magnet, RotateCw, RotateCcw, FlipHorizontal2, FlipVertical2, ChevronDown, PaintBucket, Locate, Columns2, Rows2, ArrowLeftRight, Waypoints } from 'lucide-react'
+import { MousePointer2, Plus, Minus, Undo2, Redo2, Trash2, Circle, Disc, Square, RectangleHorizontal, Fingerprint, Magnet, RotateCw, RotateCcw, FlipHorizontal2, FlipVertical2, ChevronDown, PaintBucket, Locate, Columns2, Rows2, ArrowLeftRight, Waypoints, Ruler, Grid2x2, X } from 'lucide-react'
 import type { AxisOrientation, KeepSide } from '@/lib/symmetry'
 import type { FingerHole } from '@/types'
 import { SNAP_GRID_MIN, SNAP_GRID_MAX, OUTLINE_SIZE_MIN, OUTLINE_SIZE_MAX, OUTLINE_SCALE_MIN, OUTLINE_SCALE_MAX } from '@/lib/constants'
 import { NumericInput } from '@/components/NumericInput'
 
-export type EditMode = 'select' | 'add-vertex' | 'delete-vertex' | 'finger-hole' | 'circle' | 'cylinder' | 'square' | 'rectangle' | 'filleted_rectangle' | 'fill-ring'
+export type EditMode = 'select' | 'add-vertex' | 'delete-vertex' | 'measure' | 'finger-hole' | 'circle' | 'cylinder' | 'square' | 'rectangle' | 'filleted_rectangle' | 'fill-ring'
 
 export type Selection =
   | { type: 'vertex'; pointIdx: number }
@@ -96,8 +96,15 @@ interface Props {
   onSmoothLevelChange: (level: number) => void
   snapEnabled: boolean
   setSnapEnabled: (enabled: boolean) => void
-  snapGrid: number
-  setSnapGrid: (grid: number) => void
+  // spacing of the drawn grid and of snapping, in mm
+  gridStep: number
+  setGridStep: (step: number) => void
+  // spacing actually drawn once zoomed-out views are coarsened
+  drawnGridStep: number
+  showGrid: boolean
+  setShowGrid: (show: boolean) => void
+  dimensionCount: number
+  clearDimensions: () => void
   mirrorMode: boolean
   toggleMirror: () => void
   axisOrientation: AxisOrientation
@@ -134,7 +141,8 @@ interface Props {
 export function ToolEditorToolbar({
   editMode, setEditMode,
   previewSmoothed, setPreviewSmoothed, outputSmoothed, smoothLevel, onOutputSmoothedChange, onSmoothLevelChange,
-  snapEnabled, setSnapEnabled, snapGrid, setSnapGrid,
+  snapEnabled, setSnapEnabled, gridStep, setGridStep, drawnGridStep, showGrid, setShowGrid,
+  dimensionCount, clearDimensions,
   mirrorMode, toggleMirror, axisOrientation, setAxisOrientation, keepSide, flipKeepSide,
   simplifyLevel, onSimplifyPreview, onSimplifyCommit, simplifyDisabled, nodeCount,
   canUndo, canRedo, handleUndo, handleRedo,
@@ -180,6 +188,27 @@ export function ToolEditorToolbar({
             <Minus className="w-4 h-4" />
             Remove
           </button>
+          <button
+            onClick={() => setEditMode('measure')}
+            className={`px-2.5 py-1 rounded-[7px] text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
+              previewSmoothed ? 'opacity-30 cursor-not-allowed text-text-muted' : editMode === 'measure' ? 'bg-accent-muted text-accent' : 'hover:bg-border/50 text-text-secondary'
+            }`}
+            title={previewSmoothed ? 'Switch to Accurate view to measure between points' : 'Measure between two outline points'}
+            disabled={previewSmoothed}
+          >
+            <Ruler className="w-4 h-4" />
+            Measure
+          </button>
+          {dimensionCount > 0 && (
+            <button
+              onClick={clearDimensions}
+              className="px-2 py-1 rounded-[7px] text-[11px] flex items-center gap-1 transition-colors hover:bg-border/50 text-text-secondary"
+              title="Remove all measurements"
+            >
+              <X className="w-3.5 h-3.5" />
+              Clear {dimensionCount}
+            </button>
+          )}
           <div className="relative">
             <button
               onClick={() => setCutoutOpen(prev => !prev)}
@@ -283,26 +312,38 @@ export function ToolEditorToolbar({
         <div className="h-4 w-px bg-border-subtle mx-0.5" />
 
         <button
+          onClick={() => setShowGrid(!showGrid)}
+          aria-pressed={showGrid}
+          className={`px-2 py-1 rounded-[7px] text-[11px] flex items-center gap-1 transition-colors ${
+            showGrid ? 'bg-accent-muted text-accent' : 'hover:bg-border/50 text-text-secondary'
+          }`}
+          title={showGrid
+            ? `Hide the ${gridStep}mm grid${drawnGridStep !== gridStep ? ` (drawn every ${drawnGridStep}mm at this zoom)` : ''}`
+            : `Show a ${gridStep}mm grid`}
+        >
+          <Grid2x2 className="w-3.5 h-3.5" />
+          Grid
+        </button>
+        <NumericInput
+          value={gridStep}
+          onChange={setGridStep}
+          min={SNAP_GRID_MIN}
+          max={SNAP_GRID_MAX}
+          step={0.5}
+          title="Grid spacing (mm). The grid is drawn and snapped at this spacing."
+          className="w-12 px-1 py-1 bg-elevated border border-border-subtle rounded-[6px] text-text-primary text-[10px] text-center outline-none focus:border-accent"
+        />
+        <button
           onClick={() => setSnapEnabled(!snapEnabled)}
+          aria-pressed={snapEnabled}
           className={`px-2 py-1 rounded-[7px] text-[11px] flex items-center gap-1 transition-colors ${
             snapEnabled ? 'bg-accent-muted text-accent' : 'hover:bg-border/50 text-text-secondary'
           }`}
-          title={`Snap to ${snapGrid}mm grid${snapEnabled ? ' (on)' : ' (off)'}`}
+          title={`Snap to ${gridStep}mm grid${snapEnabled ? ' (on)' : ' (off)'}`}
         >
           <Magnet className="w-3.5 h-3.5" />
           Snap
         </button>
-        {snapEnabled && (
-          <NumericInput
-            value={snapGrid}
-            onChange={setSnapGrid}
-            min={SNAP_GRID_MIN}
-            max={SNAP_GRID_MAX}
-            step={0.5}
-            title="Snap distance (mm) — how far apart the snap grid points are"
-            className="w-12 px-1 py-1 bg-elevated border border-border-subtle rounded-[6px] text-text-primary text-[10px] text-center outline-none focus:border-accent"
-          />
-        )}
 
         <button
           onClick={toggleMirror}
@@ -354,7 +395,7 @@ export function ToolEditorToolbar({
             Accurate
           </button>
           <button
-            onClick={() => { setPreviewSmoothed(true); if (editMode === 'add-vertex' || editMode === 'delete-vertex') setEditMode('select') }}
+            onClick={() => { setPreviewSmoothed(true); if (editMode === 'add-vertex' || editMode === 'delete-vertex' || editMode === 'measure') setEditMode('select') }}
             aria-pressed={previewSmoothed}
             className={`px-2 py-1 transition-colors ${previewSmoothed ? 'bg-accent-muted text-accent' : 'text-text-muted hover:text-text-secondary'}`}
           >

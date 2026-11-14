@@ -2,16 +2,25 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { Point, Polygon } from '@/types'
-import { Undo2, Redo2, Trash2, Plus, Minus, Move } from 'lucide-react'
+import { Undo2, Redo2, Trash2, Plus, Minus, Move, Ruler, Grid2x2, Magnet, X } from 'lucide-react'
 import { polygonPathData } from '@/lib/svg'
 import { useHistory } from '@/hooks/useHistory'
-import { ZOOM_FACTOR } from '@/lib/constants'
+import { SNAP_GRID, SNAP_GRID_MIN, SNAP_GRID_MAX, ZOOM_FACTOR } from '@/lib/constants'
 import { clampZoom, zoomedViewBox, viewBoxPoint, zoomAtCursor, uiScaleFor } from '@/lib/viewbox'
+import {
+  gridLines, snapToStep, resolveDimensions, pruneDimensions, createDimension, hasDimension, sameVertex,
+  type Dimension, type VertexRef,
+} from '@/lib/editorGrid'
+import { DimensionOverlay, DIMENSION_COLOUR } from '@/components/DimensionOverlay'
+import { NumericInput } from '@/components/NumericInput'
 
 interface Props {
   imageUrl: string
   polygons: Polygon[]
   onPolygonsChange: (polygons: Polygon[]) => void
+  // millimetres per image pixel from the paper calibration; without it the
+  // grid, snapping and measurements have no physical size and stay hidden
+  mmPerPx?: number | null
   editable?: boolean
   included?: Set<string>
   onIncludedChange?: (ids: Set<string>) => void
@@ -21,16 +30,21 @@ interface Props {
 // dark halo painted under outlines so they stay legible over photographs
 const HALO_STROKE = 'rgba(2, 6, 23, 0.55)'
 
-type EditMode = 'select' | 'vertex' | 'add-vertex' | 'delete-vertex'
+type EditMode = 'select' | 'vertex' | 'add-vertex' | 'delete-vertex' | 'measure'
 type DragState =
   | { type: 'vertex'; polyId: string; pointIdx: number }
   | { type: 'pan'; startClientX: number; startClientY: number; origPanX: number; origPanY: number; svgScale: number }
   | null
 
+const GRID_STROKE = 'rgba(72, 168, 214, 0.55)'
+const toolbarToggle = (active: boolean) =>
+  `p-2 rounded transition-colors cursor-pointer ${active ? 'bg-accent-muted text-accent' : 'hover:bg-border text-text-secondary'}`
+
 export function PolygonEditor({
   imageUrl,
   polygons,
   onPolygonsChange,
+  mmPerPx = null,
   editable = true,
   included,
   onIncludedChange,
@@ -67,10 +81,67 @@ export function PolygonEditor({
   const [editMode, setEditMode] = useState<EditMode>('select')
   const [dragging, setDragging] = useState<DragState>(null)
 
+  // grid overlay and snapping share one spacing, set in mm and drawn in px
+  const hasScale = typeof mmPerPx === 'number' && mmPerPx > 0
+  const [showGrid, setShowGrid] = useState(false)
+  const [snapEnabled, setSnapEnabled] = useState(false)
+  const [gridStep, setGridStep] = useState(SNAP_GRID)
+  const stepPx = hasScale ? gridStep / mmPerPx : 0
+  // point-to-point measurements; view-only, so they stay out of undo history
+  const [dimensions, setDimensions] = useState<Dimension[]>([])
+  const [pendingVertex, setPendingVertex] = useState<VertexRef | null>(null)
+  const measuring = editable && editMode === 'measure'
+
   const { set: pushHistory, undo: handleUndo, redo: handleRedo, canUndo, canRedo } = useHistory<Polygon[]>(
     polygons,
     onPolygonsChange
   )
+
+  // a reference only resolves against the outline it was made on, at the
+  // vertex count it had then; add or delete renumbers the vertices
+  const lookupVertex = useCallback((ref: VertexRef): Point | null => {
+    const poly = polygons.find(p => p.id === ref.poly)
+    if (!poly || poly.points.length !== ref.count) return null
+    return poly.points[ref.index] ?? null
+  }, [polygons])
+  const resolvedDimensions = useMemo(
+    () => hasScale ? resolveDimensions(dimensions, lookupVertex, mmPerPx) : [],
+    [dimensions, lookupVertex, hasScale, mmPerPx])
+  const pendingPoint = pendingVertex ? lookupVertex(pendingVertex) : null
+  // adjust state during render so a renumbered outline never commits with
+  // measurements that no longer name the vertices the user picked
+  const prunedDimensions = pruneDimensions(dimensions, lookupVertex)
+  if (prunedDimensions !== dimensions) setDimensions(prunedDimensions)
+  if (pendingVertex && !pendingPoint) setPendingVertex(null)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPendingVertex(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+  const removeDimension = useCallback((id: string) => {
+    setDimensions(current => current.filter(d => d.id !== id))
+  }, [])
+  const clearDimensions = () => {
+    setDimensions([])
+    setPendingVertex(null)
+  }
+  // first click marks a vertex, second click measures to it
+  const measureVertex = (polyId: string, pointIdx: number) => {
+    const poly = polygons.find(p => p.id === polyId)
+    if (!poly) return
+    const ref: VertexRef = { poly: polyId, index: pointIdx, count: poly.points.length }
+    if (!pendingVertex) {
+      setPendingVertex(ref)
+      return
+    }
+    if (!sameVertex(pendingVertex, ref)) {
+      const a = pendingVertex
+      setDimensions(dims => hasDimension(dims, a, ref) ? dims : [...dims, createDimension(a, ref)])
+    }
+    setPendingVertex(null)
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -129,6 +200,27 @@ export function PolygonEditor({
     },
     [imageSize, vb]
   )
+
+  // nearest grid point, kept inside the image like an unsnapped point
+  const snapPoint = useCallback((p: Point): Point => {
+    if (!snapEnabled || !(stepPx > 0)) return p
+    return {
+      x: Math.max(0, Math.min(imageSize.width, snapToStep(p.x, stepPx))),
+      y: Math.max(0, Math.min(imageSize.height, snapToStep(p.y, stepPx))),
+    }
+  }, [snapEnabled, stepPx, imageSize])
+
+  // grid lines over the visible part of the image
+  const grid = useMemo(() => {
+    if (!showGrid || !(stepPx > 0)) return null
+    const minX = Math.max(0, vb.x), maxX = Math.min(imageSize.width, vb.x + vb.w)
+    const minY = Math.max(0, vb.y), maxY = Math.min(imageSize.height, vb.y + vb.h)
+    return {
+      minX, maxX, minY, maxY,
+      xs: gridLines(minX, maxX, stepPx).positions,
+      ys: gridLines(minY, maxY, stepPx).positions,
+    }
+  }, [showGrid, stepPx, vb, imageSize])
 
   // scroll-to-zoom centred on the cursor (needs passive: false for preventDefault)
   useEffect(() => {
@@ -231,6 +323,11 @@ export function PolygonEditor({
     if (consumeDidPan()) return
     if (!editable) return
 
+    if (editMode === 'measure') {
+      measureVertex(polyId, pointIdx)
+      return
+    }
+
     if (editMode === 'delete-vertex') {
       const poly = polygons.find(p => p.id === polyId)
       if (!poly || poly.points.length <= 3) return // need at least 3 points
@@ -274,7 +371,7 @@ export function PolygonEditor({
         return
       }
 
-      const point = getScaledPoint(e.clientX, e.clientY)
+      const point = snapPoint(getScaledPoint(e.clientX, e.clientY))
 
       if (dragging.type === 'vertex') {
         const updated = polygonsRef.current.map((poly) => {
@@ -286,7 +383,7 @@ export function PolygonEditor({
         onPolygonsChangeRef.current(updated) // don't push to history during drag
       }
     },
-    [dragging, getScaledPoint]
+    [dragging, getScaledPoint, snapPoint]
   )
 
   const handleTouchMove = useCallback(
@@ -294,7 +391,7 @@ export function PolygonEditor({
       if (!dragging) return
       e.preventDefault()
       const t = e.touches[0]
-      const point = getScaledPoint(t.clientX, t.clientY)
+      const point = snapPoint(getScaledPoint(t.clientX, t.clientY))
 
       if (dragging.type === 'vertex') {
         const updated = polygonsRef.current.map((poly) => {
@@ -306,7 +403,7 @@ export function PolygonEditor({
         onPolygonsChangeRef.current(updated)
       }
     },
-    [dragging, getScaledPoint]
+    [dragging, getScaledPoint, snapPoint]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -342,6 +439,7 @@ export function PolygonEditor({
   const handleBackgroundClick = () => {
     if (consumeDidPan()) return
     setActiveId(null)
+    setPendingVertex(null)
   }
 
   const handleCanvasMouseDown = (e: React.MouseEvent) => {
@@ -380,7 +478,8 @@ export function PolygonEditor({
   // auto-activate first included polygon when switching to edit modes
   const handleModeChange = (mode: EditMode) => {
     setEditMode(mode)
-    if ((mode === 'vertex' || mode === 'add-vertex' || mode === 'delete-vertex') && !activeId && polygons.length > 0) {
+    if (mode !== 'measure') setPendingVertex(null)
+    if ((mode === 'vertex' || mode === 'add-vertex' || mode === 'delete-vertex' || mode === 'measure') && !activeId && polygons.length > 0) {
       const first = hasInclusion
         ? polygons.find(p => included!.has(p.id))
         : polygons[0]
@@ -434,7 +533,65 @@ export function PolygonEditor({
             >
               <Minus className="w-5 h-5" />
             </button>
+            {hasScale && (
+              <button
+                onClick={() => handleModeChange('measure')}
+                className={toolbarToggle(editMode === 'measure')}
+                aria-label="Measure"
+                title="Measure between two outline points"
+              >
+                <Ruler className="w-5 h-5" />
+              </button>
+            )}
           </div>
+
+          {hasScale && (
+            <>
+              <div className="h-6 w-px bg-border-subtle" />
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setShowGrid(!showGrid)}
+                  aria-pressed={showGrid}
+                  aria-label="Grid"
+                  className={toolbarToggle(showGrid)}
+                  title={showGrid ? `Hide the ${gridStep}mm grid` : `Show a ${gridStep}mm grid`}
+                >
+                  <Grid2x2 className="w-5 h-5" />
+                </button>
+                <NumericInput
+                  value={gridStep}
+                  onChange={setGridStep}
+                  min={SNAP_GRID_MIN}
+                  max={SNAP_GRID_MAX}
+                  step={0.5}
+                  title="Grid spacing (mm). The grid is drawn and snapped at this spacing."
+                  className="w-14 h-8 px-1 bg-elevated border border-border rounded text-text-primary text-xs text-center outline-none focus:border-accent"
+                />
+                <span className="text-xs text-text-muted">mm</span>
+                <button
+                  onClick={() => setSnapEnabled(!snapEnabled)}
+                  aria-pressed={snapEnabled}
+                  aria-label="Snap"
+                  className={toolbarToggle(snapEnabled)}
+                  title={`Snap dragged vertices to the ${gridStep}mm grid${snapEnabled ? ' (on)' : ' (off)'}`}
+                >
+                  <Magnet className="w-5 h-5" />
+                </button>
+              </div>
+
+              {resolvedDimensions.length > 0 && (
+                <button
+                  onClick={clearDimensions}
+                  className="px-2 py-1.5 rounded text-sm text-text-secondary hover:bg-border flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Remove all measurements"
+                >
+                  <X className="w-4 h-4" />
+                  Clear {resolvedDimensions.length}
+                </button>
+              )}
+            </>
+          )}
 
           <div className="h-6 w-px bg-border-subtle" />
 
@@ -457,11 +614,14 @@ export function PolygonEditor({
             </button>
           </div>
 
-          <span className="text-sm text-text-muted">
+          <span className="text-sm text-text-muted" role="status">
             {(editMode === 'select' || editMode === 'vertex') && !activeId && 'Click outlines to select tools'}
             {(editMode === 'select' || editMode === 'vertex') && activeId && 'Drag vertices to adjust the outline'}
             {editMode === 'add-vertex' && 'Click on an edge to add a vertex'}
             {editMode === 'delete-vertex' && 'Click a vertex to remove it'}
+            {editMode === 'measure' && (pendingVertex
+              ? 'Click a second point to finish the measurement, or Escape to cancel'
+              : 'Click two outline points to measure between them; click a measurement to remove it')}
           </span>
 
           {activeId && (
@@ -501,11 +661,30 @@ export function PolygonEditor({
             aria-label="Corrected"
             className="pointer-events-none select-none"
           />
+
+          {/* grid in real millimetres, from the image origin */}
+          {grid && (
+            <g className="pointer-events-none">
+              {grid.xs.map(gx => (
+                <line key={`gx${gx}`} data-grid-line="x" x1={gx} y1={grid.minY} x2={gx} y2={grid.maxY}
+                  stroke={GRID_STROKE} strokeWidth={uiScale * 0.75} />
+              ))}
+              {grid.ys.map(gy => (
+                <line key={`gy${gy}`} data-grid-line="y" x1={grid.minX} y1={gy} x2={grid.maxX} y2={gy}
+                  stroke={GRID_STROKE} strokeWidth={uiScale * 0.75} />
+              ))}
+            </g>
+          )}
+
           {polygons.map((poly) => {
             const isActive = activeId === poly.id
             const polyIncluded = isIncluded(poly.id)
             const isHovered = hovered === poly.id
             const pathData = polygonPathData(poly.points, poly.interior_rings)
+            const showHandles = editable && (
+              (isActive && (editMode === 'vertex' || editMode === 'select' || editMode === 'add-vertex' || editMode === 'delete-vertex'))
+              // measuring works across every selected tool, not only the active one
+              || (measuring && (isActive || polyIncluded)))
 
             let fill = 'rgba(90, 180, 222, 0.08)'
             let stroke = 'rgba(90, 180, 222, 0.85)'
@@ -578,37 +757,49 @@ export function PolygonEditor({
                   })}
 
                 {/* vertex handles */}
-                {isActive &&
-                  editable &&
-                  (editMode === 'vertex' || editMode === 'select' || editMode === 'add-vertex' || editMode === 'delete-vertex') &&
-                  poly.points.map((point, idx) => (
-                    <g key={idx}>
-                      {/* transparent hit target -- larger for touch */}
-                      <circle
-                        cx={point.x}
-                        cy={point.y}
-                        r={uiScale * 16}
-                        fill="transparent"
-                        className={editMode === 'delete-vertex' ? 'cursor-pointer touch-none' : 'cursor-move touch-none'}
-                        onMouseDown={editMode !== 'delete-vertex' ? handleVertexMouseDown(poly.id, idx) : undefined}
-                        onTouchStart={editMode !== 'delete-vertex' ? handleVertexTouchStart(poly.id, idx) : undefined}
-                        onClick={handleVertexClick(poly.id, idx)}
-                      />
-                      <circle
-                        cx={point.x}
-                        cy={point.y}
-                        r={uiScale * 8}
-                        fill={editMode === 'delete-vertex' ? 'rgb(239, 68, 68)' : '#27272a'}
-                        stroke={editMode === 'delete-vertex' ? 'rgb(185, 28, 28)' : 'rgb(72, 168, 214)'}
-                        strokeWidth={uiScale * 2}
-                        className="pointer-events-none"
-                      />
-                    </g>
-                  ))}
+                {showHandles &&
+                  poly.points.map((point, idx) => {
+                    const isPending = measuring && !!pendingVertex && pendingVertex.poly === poly.id && pendingVertex.index === idx
+                    const draggable = editMode !== 'delete-vertex' && !measuring
+                    return (
+                      <g key={idx}>
+                        {/* transparent hit target -- larger for touch */}
+                        <circle
+                          data-vertex={idx}
+                          data-polygon={poly.id}
+                          cx={point.x}
+                          cy={point.y}
+                          r={uiScale * 16}
+                          fill="transparent"
+                          className={measuring ? 'cursor-crosshair touch-none' : editMode === 'delete-vertex' ? 'cursor-pointer touch-none' : 'cursor-move touch-none'}
+                          onMouseDown={draggable ? handleVertexMouseDown(poly.id, idx) : undefined}
+                          onTouchStart={draggable ? handleVertexTouchStart(poly.id, idx) : undefined}
+                          onClick={handleVertexClick(poly.id, idx)}
+                        />
+                        <circle
+                          cx={point.x}
+                          cy={point.y}
+                          r={uiScale * 8}
+                          fill={editMode === 'delete-vertex' ? 'rgb(239, 68, 68)' : isPending ? DIMENSION_COLOUR : '#27272a'}
+                          stroke={editMode === 'delete-vertex' ? 'rgb(185, 28, 28)' : measuring ? DIMENSION_COLOUR : 'rgb(72, 168, 214)'}
+                          strokeWidth={uiScale * 2}
+                          className="pointer-events-none"
+                        />
+                      </g>
+                    )
+                  })}
 
               </g>
             )
           })}
+
+          {/* point-to-point measurements in mm */}
+          <DimensionOverlay
+            dimensions={resolvedDimensions}
+            ui={uiScale}
+            pending={pendingPoint}
+            onRemove={measuring ? removeDimension : undefined}
+          />
         </svg>
 
         {/* zoom controls */}
