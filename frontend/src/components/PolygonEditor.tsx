@@ -36,10 +36,12 @@ type DragState =
   | { type: 'pan'; startClientX: number; startClientY: number; origPanX: number; origPanY: number; svgScale: number }
   | null
 
-// drawn one screen pixel wide with crisp edges: a sub-pixel translucent
-// line all but vanishes over a grey photograph
-const GRID_STROKE = 'rgba(56, 160, 215, 0.8)'
-const GRID_MAJOR_STROKE = 'rgb(56, 160, 215)'
+// a light line over a dark halo reads on white paper, grey card and dark
+// table alike; drawn one screen pixel wide with crisp edges, since a
+// sub-pixel translucent line all but vanishes over a photograph
+const GRID_STROKE = 'rgba(255, 255, 255, 0.85)'
+const GRID_MAJOR_STROKE = 'rgb(255, 255, 255)'
+const GRID_HALO = 'rgba(2, 6, 23, 0.55)'
 const GRID_MAJOR_EVERY = 5
 const toolbarToggle = (active: boolean) =>
   `p-2 rounded transition-colors cursor-pointer ${active ? 'bg-accent-muted text-accent' : 'hover:bg-border text-text-secondary'}`
@@ -487,7 +489,7 @@ export function PolygonEditor({
   const handleModeChange = (mode: EditMode) => {
     setEditMode(mode)
     if (mode !== 'measure') setPendingVertex(null)
-    if ((mode === 'vertex' || mode === 'add-vertex' || mode === 'delete-vertex' || mode === 'measure') && !activeId && polygons.length > 0) {
+    if ((mode === 'vertex' || mode === 'add-vertex' || mode === 'delete-vertex') && !activeId && polygons.length > 0) {
       const first = hasInclusion
         ? polygons.find(p => included!.has(p.id))
         : polygons[0]
@@ -673,6 +675,15 @@ export function PolygonEditor({
           {/* grid in real millimetres, from the image origin */}
           {grid && (
             <g className="pointer-events-none" shapeRendering="crispEdges">
+              {/* halos first so no halo covers a neighbouring line */}
+              {grid.xs.map(({ at, major }) => (
+                <line key={`hx${at}`} data-grid-halo x1={at} y1={grid.minY} x2={at} y2={grid.maxY}
+                  stroke={GRID_HALO} strokeWidth={uiScale * (major ? 4 : 3)} />
+              ))}
+              {grid.ys.map(({ at, major }) => (
+                <line key={`hy${at}`} data-grid-halo x1={grid.minX} y1={at} x2={grid.maxX} y2={at}
+                  stroke={GRID_HALO} strokeWidth={uiScale * (major ? 4 : 3)} />
+              ))}
               {grid.xs.map(({ at, major }) => (
                 <line key={`gx${at}`} data-grid-line="x" x1={at} y1={grid.minY} x2={at} y2={grid.maxY}
                   stroke={major ? GRID_MAJOR_STROKE : GRID_STROKE} strokeWidth={uiScale * (major ? 2 : 1)} />
@@ -689,10 +700,10 @@ export function PolygonEditor({
             const polyIncluded = isIncluded(poly.id)
             const isHovered = hovered === poly.id
             const pathData = polygonPathData(poly.points, poly.interior_rings)
-            const showHandles = editable && (
-              (isActive && (editMode === 'vertex' || editMode === 'select' || editMode === 'add-vertex' || editMode === 'delete-vertex'))
-              // measuring works across every selected tool, not only the active one
-              || (measuring && (isActive || polyIncluded)))
+            // measuring offers every traced outline's points, selected or
+            // not: a reopened session starts with nothing selected
+            const showHandles = editable && (measuring
+              || (isActive && (editMode === 'vertex' || editMode === 'select' || editMode === 'add-vertex' || editMode === 'delete-vertex')))
 
             let fill = 'rgba(90, 180, 222, 0.08)'
             let stroke = 'rgba(90, 180, 222, 0.85)'

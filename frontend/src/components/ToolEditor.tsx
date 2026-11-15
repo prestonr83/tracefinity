@@ -930,6 +930,7 @@ export function ToolEditor({ points, fingerHoles, interiorRings, smoothed, smoot
         showGrid={showGrid}
         gridLinesX={gridX.positions}
         gridLinesY={gridY.positions}
+        gridStep={drawnGridStep}
         gridExtent={{ minX: visMinX, maxX: visMaxX, minY: visMinY, maxY: visMaxY }}
         dimensions={resolvedDimensions}
         pendingVertex={pendingPoint}

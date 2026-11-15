@@ -28,6 +28,9 @@
   --color-tool-stroke: #8b95a5;
   --color-bin-preview-fill: #1e293b;
   --color-bin-preview-grid: rgba(255, 255, 255, 0.08);
+  --color-editor-grid: rgba(255, 255, 255, 0.14);
+  --color-editor-grid-major: rgba(255, 255, 255, 0.26);
+  --color-editor-grid-origin: rgba(255, 255, 255, 0.45);
   color-scheme: dark;
 }
 
@@ -53,6 +56,9 @@
   --color-tool-stroke: #334155;
   --color-bin-preview-fill: #e2e8f0;
   --color-bin-preview-grid: rgba(15, 23, 42, 0.12);
+  --color-editor-grid: rgba(15, 23, 42, 0.16);
+  --color-editor-grid-major: rgba(15, 23, 42, 0.3);
+  --color-editor-grid-origin: rgba(15, 23, 42, 0.5);
   color-scheme: light;
 }
 

@@ -158,6 +158,34 @@ describe('PolygonEditor measurements', () => {
     expect(screen.queryByRole('button', { name: /^Clear/ })).toBeNull()
   })
 
+  it('offers the points of every outline, selected or not, as a reopened session starts with none selected', async () => {
+    const other = polygon('other', [{ x: 600, y: 100 }, { x: 800, y: 100 }, { x: 800, y: 300 }, { x: 600, y: 300 }])
+    let current = [square, other]
+    function Editor() {
+      const [polygons, setPolygons] = useState(current)
+      return (
+        <PolygonEditor
+          imageUrl="/corrected.jpg"
+          polygons={polygons}
+          mmPerPx={MM_PER_PX}
+          included={new Set<string>()}
+          onIncludedChange={() => {}}
+          onPolygonsChange={next => { current = next; setPolygons(next) }}
+        />
+      )
+    }
+    const { container } = render(<Editor />)
+    await screen.findByRole('img', { name: 'Corrected' })
+    expect(container.querySelectorAll('circle[data-vertex]')).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Measure' }))
+    expect(container.querySelectorAll('circle[data-vertex]')).toHaveLength(8)
+    // across two tools: 300 px between the squares is 150 mm
+    fireEvent.click(container.querySelector('circle[data-polygon="tool"][data-vertex="1"]')!)
+    fireEvent.click(container.querySelector('circle[data-polygon="other"][data-vertex="0"]')!)
+    expect(screen.getByLabelText('Dimension 150.0 mm')).toBeTruthy()
+  })
+
   it('removes a measurement when it is clicked in Measure mode or cleared', async () => {
     const editor = await setup()
     fireEvent.click(editor.button('Measure'))

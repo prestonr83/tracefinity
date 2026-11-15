@@ -25,6 +25,8 @@ interface Props {
   showGrid: boolean
   gridLinesX: number[]
   gridLinesY: number[]
+  // spacing the lines were generated at; every fifth is emphasised
+  gridStep: number
   gridExtent: { minX: number; maxX: number; minY: number; maxY: number }
   zoom: number
 
@@ -64,7 +66,7 @@ interface Props {
 export function ToolEditorCanvas({
   svgRef, zvbX, zvbY, zvbW, zvbH, isCutoutMode,
   handleBackgroundClick, handleSvgMouseDown,
-  showGrid, gridLinesX, gridLinesY, gridExtent, zoom,
+  showGrid, gridLinesX, gridLinesY, gridStep, gridExtent, zoom,
   dimensions, pendingVertex, onRemoveDimension,
   displayPoints, smoothed, interiorRings,
   points, editMode, selection,
@@ -118,35 +120,44 @@ export function ToolEditorCanvas({
             />
           )}
 
-          {/* grid lines */}
-          {showGrid && gridLinesX.map(gx => {
-            const isOrigin = gx === 0
+          {/* grid lines: themed tokens so they read on the light inset too,
+              one screen pixel for minor lines, heavier every fifth and at the origin */}
+          {showGrid && (() => {
+            const ui = zvbW / 800
+            const style = (v: number) => {
+              if (v === 0) return { stroke: 'var(--color-editor-grid-origin)', width: 2 * ui }
+              if (Math.round(v / gridStep) % 5 === 0) return { stroke: 'var(--color-editor-grid-major)', width: 1.5 * ui }
+              return { stroke: 'var(--color-editor-grid)', width: 1 * ui }
+            }
             return (
-              <line
-                key={`v${gx}`}
-                data-grid-line="x"
-                x1={gx * DISPLAY_SCALE} y1={gridExtent.minY * DISPLAY_SCALE}
-                x2={gx * DISPLAY_SCALE} y2={gridExtent.maxY * DISPLAY_SCALE}
-                stroke={isOrigin ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'}
-                strokeWidth={(isOrigin ? 1.5 : 0.5) / zoom}
-                className="pointer-events-none"
-              />
+              <g className="pointer-events-none" shapeRendering="crispEdges">
+                {gridLinesX.map(gx => {
+                  const s = style(gx)
+                  return (
+                    <line
+                      key={`v${gx}`}
+                      data-grid-line="x"
+                      x1={gx * DISPLAY_SCALE} y1={gridExtent.minY * DISPLAY_SCALE}
+                      x2={gx * DISPLAY_SCALE} y2={gridExtent.maxY * DISPLAY_SCALE}
+                      stroke={s.stroke} strokeWidth={s.width}
+                    />
+                  )
+                })}
+                {gridLinesY.map(gy => {
+                  const s = style(gy)
+                  return (
+                    <line
+                      key={`h${gy}`}
+                      data-grid-line="y"
+                      x1={gridExtent.minX * DISPLAY_SCALE} y1={gy * DISPLAY_SCALE}
+                      x2={gridExtent.maxX * DISPLAY_SCALE} y2={gy * DISPLAY_SCALE}
+                      stroke={s.stroke} strokeWidth={s.width}
+                    />
+                  )
+                })}
+              </g>
             )
-          })}
-          {showGrid && gridLinesY.map(gy => {
-            const isOrigin = gy === 0
-            return (
-              <line
-                key={`h${gy}`}
-                data-grid-line="y"
-                x1={gridExtent.minX * DISPLAY_SCALE} y1={gy * DISPLAY_SCALE}
-                x2={gridExtent.maxX * DISPLAY_SCALE} y2={gy * DISPLAY_SCALE}
-                stroke={isOrigin ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.08)'}
-                strokeWidth={(isOrigin ? 1.5 : 0.5) / zoom}
-                className="pointer-events-none"
-              />
-            )
-          })}
+          })()}
 
           {/* polygon fill */}
           <path
