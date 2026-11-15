@@ -32,14 +32,16 @@ export function DimensionOverlay({ dimensions, scale = 1, ui, pending, onRemove 
           ny = (bx - ax) / len
           if (ny > 0) { nx = -nx; ny = -ny }
         }
-        const tick = 5 * ui
-        const mx = (ax + bx) / 2 + nx * 9 * ui
-        const my = (ay + by) / 2 + ny * 9 * ui
+        const tick = 6 * ui
         const label = formatMm(d.length)
-        // click targets: the label and the middle of the line, never its
-        // ends, which sit on vertices the user still needs to click
-        const hitW = (label.length * 6.5 + 10) * ui
-        const hitH = 16 * ui
+        // label pill, centred above the midpoint; its box is also the click
+        // target, together with the middle of the line but never its ends,
+        // which sit on vertices the user still needs to click
+        const fontSize = 13 * ui
+        const pillW = (label.length * 7.6 + 14) * ui
+        const pillH = 22 * ui
+        const mx = (ax + bx) / 2 + nx * (pillH / 2 + 6 * ui)
+        const my = (ay + by) / 2 + ny * (pillH / 2 + 6 * ui)
         return (
           <g
             key={d.id}
@@ -51,36 +53,43 @@ export function DimensionOverlay({ dimensions, scale = 1, ui, pending, onRemove 
           >
             <title>{`${label} (Δx ${formatMm(Math.abs(d.dx))}, Δy ${formatMm(Math.abs(d.dy))})${onRemove ? '. Click to remove.' : ''}`}</title>
             {onRemove && (
-              <>
-                <line
-                  x1={ax + (bx - ax) * 0.2} y1={ay + (by - ay) * 0.2}
-                  x2={ax + (bx - ax) * 0.8} y2={ay + (by - ay) * 0.8}
-                  stroke="transparent" strokeWidth={14 * ui}
-                />
-                <rect x={mx - hitW / 2} y={my - hitH / 2} width={hitW} height={hitH} fill="transparent" />
-              </>
+              <line
+                x1={ax + (bx - ax) * 0.2} y1={ay + (by - ay) * 0.2}
+                x2={ax + (bx - ax) * 0.8} y2={ay + (by - ay) * 0.8}
+                stroke="transparent" strokeWidth={14 * ui}
+              />
             )}
-            <line x1={ax} y1={ay} x2={bx} y2={by} stroke={HALO} strokeWidth={3.5 * ui} className="pointer-events-none" />
-            <line x1={ax} y1={ay} x2={bx} y2={by} stroke={DIMENSION_COLOUR} strokeWidth={1.5 * ui} className="pointer-events-none" />
+            <line x1={ax} y1={ay} x2={bx} y2={by} stroke={HALO} strokeWidth={4 * ui} className="pointer-events-none" />
+            <line x1={ax} y1={ay} x2={bx} y2={by} stroke={DIMENSION_COLOUR} strokeWidth={2 * ui} className="pointer-events-none" />
             {[[ax, ay], [bx, by]].map(([x, y], i) => (
               <line
                 key={i}
                 x1={x + nx * tick} y1={y + ny * tick}
                 x2={x - nx * tick} y2={y - ny * tick}
-                stroke={DIMENSION_COLOUR} strokeWidth={1.5 * ui}
+                stroke={HALO} strokeWidth={4 * ui}
                 className="pointer-events-none"
               />
             ))}
+            {[[ax, ay], [bx, by]].map(([x, y], i) => (
+              <line
+                key={`t${i}`}
+                x1={x + nx * tick} y1={y + ny * tick}
+                x2={x - nx * tick} y2={y - ny * tick}
+                stroke={DIMENSION_COLOUR} strokeWidth={2 * ui}
+                className="pointer-events-none"
+              />
+            ))}
+            <rect
+              x={mx - pillW / 2} y={my - pillH / 2} width={pillW} height={pillH} rx={5 * ui}
+              fill={HALO} stroke={DIMENSION_COLOUR} strokeWidth={1 * ui}
+            />
             <text
               x={mx} y={my}
               textAnchor="middle"
-              dominantBaseline="middle"
-              fontSize={11 * ui}
+              dominantBaseline="central"
+              fontSize={fontSize}
               fontWeight={600}
               fill={DIMENSION_COLOUR}
-              stroke={HALO}
-              strokeWidth={3 * ui}
-              paintOrder="stroke"
               className="pointer-events-none select-none tabular-nums"
             >
               {label}

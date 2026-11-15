@@ -36,7 +36,11 @@ type DragState =
   | { type: 'pan'; startClientX: number; startClientY: number; origPanX: number; origPanY: number; svgScale: number }
   | null
 
-const GRID_STROKE = 'rgba(72, 168, 214, 0.55)'
+// drawn one screen pixel wide with crisp edges: a sub-pixel translucent
+// line all but vanishes over a grey photograph
+const GRID_STROKE = 'rgba(56, 160, 215, 0.8)'
+const GRID_MAJOR_STROKE = 'rgb(56, 160, 215)'
+const GRID_MAJOR_EVERY = 5
 const toolbarToggle = (active: boolean) =>
   `p-2 rounded transition-colors cursor-pointer ${active ? 'bg-accent-muted text-accent' : 'hover:bg-border text-text-secondary'}`
 
@@ -215,10 +219,14 @@ export function PolygonEditor({
     if (!showGrid || !(stepPx > 0)) return null
     const minX = Math.max(0, vb.x), maxX = Math.min(imageSize.width, vb.x + vb.w)
     const minY = Math.max(0, vb.y), maxY = Math.min(imageSize.height, vb.y + vb.h)
+    const xs = gridLines(minX, maxX, stepPx)
+    const ys = gridLines(minY, maxY, stepPx)
+    // every fifth line of the spacing actually drawn is emphasised
+    const major = (v: number, step: number) => Math.round(v / step) % GRID_MAJOR_EVERY === 0
     return {
       minX, maxX, minY, maxY,
-      xs: gridLines(minX, maxX, stepPx).positions,
-      ys: gridLines(minY, maxY, stepPx).positions,
+      xs: xs.positions.map(x => ({ at: x, major: major(x, xs.step) })),
+      ys: ys.positions.map(y => ({ at: y, major: major(y, ys.step) })),
     }
   }, [showGrid, stepPx, vb, imageSize])
 
@@ -664,14 +672,14 @@ export function PolygonEditor({
 
           {/* grid in real millimetres, from the image origin */}
           {grid && (
-            <g className="pointer-events-none">
-              {grid.xs.map(gx => (
-                <line key={`gx${gx}`} data-grid-line="x" x1={gx} y1={grid.minY} x2={gx} y2={grid.maxY}
-                  stroke={GRID_STROKE} strokeWidth={uiScale * 0.75} />
+            <g className="pointer-events-none" shapeRendering="crispEdges">
+              {grid.xs.map(({ at, major }) => (
+                <line key={`gx${at}`} data-grid-line="x" x1={at} y1={grid.minY} x2={at} y2={grid.maxY}
+                  stroke={major ? GRID_MAJOR_STROKE : GRID_STROKE} strokeWidth={uiScale * (major ? 2 : 1)} />
               ))}
-              {grid.ys.map(gy => (
-                <line key={`gy${gy}`} data-grid-line="y" x1={grid.minX} y1={gy} x2={grid.maxX} y2={gy}
-                  stroke={GRID_STROKE} strokeWidth={uiScale * 0.75} />
+              {grid.ys.map(({ at, major }) => (
+                <line key={`gy${at}`} data-grid-line="y" x1={grid.minX} y1={at} x2={grid.maxX} y2={at}
+                  stroke={major ? GRID_MAJOR_STROKE : GRID_STROKE} strokeWidth={uiScale * (major ? 2 : 1)} />
               ))}
             </g>
           )}
